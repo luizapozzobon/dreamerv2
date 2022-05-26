@@ -286,7 +286,11 @@ class Crafter:
 
         self._env = crafter.Env(reward=reward, seed=seed)
         self._env = crafter.Recorder(
-            self._env, outdir, save_stats=True, save_video=False, save_episode=False,
+            self._env,
+            outdir,
+            save_stats=True,
+            save_video=False,
+            save_episode=False,
         )
         self._achievements = crafter.constants.achievements.copy()
 
@@ -302,7 +306,7 @@ class Crafter:
         }
         spaces.update(
             {
-                f"log_achievement_{k}": gym.spaces.Box(0, 2 ** 31 - 1, (), np.int32)
+                f"log_achievement_{k}": gym.spaces.Box(0, 2**31 - 1, (), np.int32)
                 for k in self._achievements
             }
         )
@@ -675,4 +679,3 @@ class Async:
                 conn.close()
             except IOError:
                 pass  # The connection was already closed.
-
