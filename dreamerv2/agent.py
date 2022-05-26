@@ -59,7 +59,7 @@ class Agent(common.Module):
         state = (latent, action)
         return outputs, state
 
-    @tf.function
+    # @tf.function
     def train(self, data, state=None):
         metrics = {}
         state, outputs, mets = self.wm.train(data, state)

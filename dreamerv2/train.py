@@ -6,6 +6,7 @@ import pathlib
 import re
 import sys
 import warnings
+from collections.abc import Iterable
 
 try:
     import rich.traceback
@@ -49,14 +50,31 @@ def main():
 
     tf.config.experimental_run_functions_eagerly(not config.jit)
     message = "No GPU found. To actually train on CPU remove this assert."
-    assert tf.config.experimental.list_physical_devices("GPU"), message
-    for gpu in tf.config.experimental.list_physical_devices("GPU"):
-        tf.config.experimental.set_memory_growth(gpu, True)
+    physical_devices = tf.config.experimental.list_physical_devices("GPU")
+    assert physical_devices, message
+
+    gpu_ids = config["gpu_ids"]
+    if not isinstance(gpu_ids, Iterable):
+        raise ValueError('`gpu_ids` should be an iterable of integers corresponding to the gpu ids to be used.')
+
+    if gpu_ids:
+        devices = [physical_devices[i] for i in gpu_ids]
+        tf.config.set_visible_devices(
+            devices, device_type='GPU'
+        )
+    logical_devices = tf.config.list_logical_devices('GPU')
+
+    # for gpu in logical_devices:
+    #     tf.config.experimental.set_memory_growth(gpu, True)
+
     assert config.precision in (16, 32), config.precision
     if config.precision == 16:
         from tensorflow.keras.mixed_precision import experimental as prec
 
         prec.set_policy(prec.Policy("mixed_float16"))
+
+    strategy = tf.distribute.MirroredStrategy(logical_devices)
+    print('Number of devices: {}'.format(strategy.num_replicas_in_sync))
 
     train_replay = common.Replay(logdir / "train_episodes", **config.replay)
     eval_replay = common.Replay(
@@ -91,7 +109,10 @@ def main():
             env = common.NormalizeAction(env)
         elif suite == "atari":
             env = common.Atari(
-                task, config.action_repeat, config.render_size, config.atari_grayscale
+                task,
+                config.action_repeat,
+                config.render_size,
+                config.atari_grayscale,
             )
             env = common.OneHotAction(env)
         elif suite == "crafter":
@@ -148,60 +169,79 @@ def main():
     eval_driver.on_episode(lambda ep: per_episode(ep, mode="eval"))
     eval_driver.on_episode(eval_replay.add_episode)
 
-    prefill = max(0, config.prefill - train_replay.stats["total_steps"])
-    if prefill:
-        print(f"Prefill dataset ({prefill} steps).")
-        random_agent = common.RandomAgent(act_space)
-        train_driver(random_agent, steps=prefill, episodes=1)
-        eval_driver(random_agent, episodes=1)
-        train_driver.reset()
-        eval_driver.reset()
+    # https://www.tensorflow.org/api_docs/python/tf/distribute/get_strategy
+    with strategy.scope():
+        prefill = max(0, config.prefill - train_replay.stats["total_steps"])
+        if prefill:
+            print(f"Prefill dataset ({prefill} steps).")
+            random_agent = common.RandomAgent(act_space)
+            train_driver(random_agent, steps=prefill, episodes=1)
+            eval_driver(random_agent, episodes=1)
+            train_driver.reset()
+            eval_driver.reset()
 
-    print("Create agent.")
-    train_dataset = iter(train_replay.dataset(**config.dataset))
-    report_dataset = iter(train_replay.dataset(**config.dataset))
-    eval_dataset = iter(eval_replay.dataset(**config.dataset))
-    agnt = agent.Agent(config, obs_space, act_space, step)
-    train_agent = common.CarryOverState(agnt.train)
-    train_agent(next(train_dataset))
-    if (logdir / "variables.pkl").exists():
-        agnt.load(logdir / "variables.pkl")
-    else:
-        print("Pretrain agent.")
-        for _ in range(config.pretrain):
-            train_agent(next(train_dataset))
-    train_policy = lambda *args: agnt.policy(
-        *args, mode="explore" if should_expl(step) else "train"
-    )
-    eval_policy = lambda *args: agnt.policy(*args, mode="eval")
+        print("Create agent.")
 
-    def train_step(tran, worker):
-        if should_train(step):
-            for _ in range(config.train_steps):
-                mets = train_agent(next(train_dataset))
-                [metrics[key].append(value) for key, value in mets.items()]
-        if should_log(step):
-            for name, values in metrics.items():
-                logger.scalar(name, np.array(values, np.float64).mean())
-                metrics[name].clear()
-            logger.add(agnt.report(next(report_dataset)), prefix="train")
-            logger.write(fps=True)
+        train_dataset = iter(train_replay.dataset(**config.dataset))
+        report_dataset = iter(train_replay.dataset(**config.dataset))
+        eval_dataset = iter(eval_replay.dataset(**config.dataset))
 
-    train_driver.on_step(train_step)
+        agnt = agent.Agent(config, obs_space, act_space, step)
+        train_agent = common.CarryOverState(agnt.train)
 
-    while step < config.steps:
-        logger.write()
-        print("Start evaluation.")
-        logger.add(agnt.report(next(eval_dataset)), prefix="eval")
-        eval_driver(eval_policy, episodes=config.eval_eps)
-        print("Start training.")
-        train_driver(train_policy, steps=config.eval_every)
-        agnt.save(logdir / "variables.pkl")
-    for env in train_envs + eval_envs:
-        try:
-            env.close()
-        except Exception:
-            pass
+        # @tf.function
+        # https://colab.research.google.com/github/tensorflow/docs/blob/master/site/en/tutorials/distribute/custom_training.ipynb?hl=nl#scrollTo=gX975dMSNw0e
+        def distributed_train_agent(dataset_inputs):
+            per_replica_losses = strategy.run(train_agent, args=(dataset_inputs,))
+            return strategy.reduce(tf.distribute.ReduceOp.MEAN, per_replica_losses,
+                                     axis=None)
+
+        #train_agent(next(train_dataset))
+        distributed_train_agent(next(train_dataset))
+        if (logdir / "variables.pkl").exists():
+            agnt.load(logdir / "variables.pkl")
+        else:
+            print("Pretrain agent.")
+            for _ in range(config.pretrain):
+                # train_agent(next(train_dataset))
+                distributed_train_agent(next(train_dataset))
+        train_policy = lambda *args: agnt.policy(
+            *args, mode="explore" if should_expl(step) else "train"
+        )
+        eval_policy = lambda *args: agnt.policy(*args, mode="eval")
+
+
+        def train_step(tran, worker):
+            if should_train(step):
+                for _ in range(config.train_steps):
+                    # mets = train_agent(next(train_dataset))
+                    mets = distributed_train_agent(next(train_dataset))
+                    [metrics[key].append(value) for key, value in mets.items()]
+            if should_log(step):
+                for name, values in metrics.items():
+                    try:
+                        logger.scalar(name, np.array([v for val in values for v in val.values], np.float64).mean())
+                    except AttributeError as err:
+                        logger.scalar(name, np.array(values, np.float64).mean())
+                    metrics[name].clear()
+                logger.add(agnt.report(next(report_dataset)), prefix="train")
+                logger.write(fps=True)
+
+        train_driver.on_step(train_step)
+
+        while step < config.steps:
+            logger.write()
+            print("Start evaluation.")
+            logger.add(agnt.report(next(eval_dataset)), prefix="eval")
+            eval_driver(eval_policy, episodes=config.eval_eps)
+            print("Start training.")
+            train_driver(train_policy, steps=config.eval_every)
+            agnt.save(logdir / "variables.pkl")
+        for env in train_envs + eval_envs:
+            try:
+                env.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
