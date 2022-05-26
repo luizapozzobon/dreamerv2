@@ -253,7 +253,8 @@ class Atari:
             image = image[..., None]
         return {
             "image": image,
-            "ram": self._env.env._get_ram(),
+            # "ram": self._env.env._get_ram(),
+            "ram": self._env.env.ale.getRAM(),
             "reward": reward,
             "is_first": False,
             "is_last": done,
@@ -267,7 +268,8 @@ class Atari:
             image = image[..., None]
         return {
             "image": image,
-            "ram": self._env.env._get_ram(),
+            # "ram": self._env.env._get_ram(),
+            "ram": self._env.env.ale.getRAM(),
             "reward": 0.0,
             "is_first": True,
             "is_last": False,
