@@ -1,0 +1,10 @@
+name: dreamerv2
+channels:
+        - conda-forge
+        - defaults
+dependencies:
+        - python=3.7
+        - ffmpeg
+        - cudnn=8.0
+        - unrar
+        - wget
