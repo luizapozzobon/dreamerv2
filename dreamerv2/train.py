@@ -58,11 +58,13 @@ def main():
         raise ValueError('`gpu_ids` should be an iterable of integers corresponding to the gpu ids to be used.')
 
     if gpu_ids:
-        devices = [physical_devices[i] for i in gpu_ids]
+        devices = [device for device in physical_devices for gpu_id in gpu_ids if f"GPU:{gpu_id}" in device.name]
+        print("Selected physical devices: ", devices)
         tf.config.set_visible_devices(
             devices, device_type='GPU'
         )
     logical_devices = tf.config.list_logical_devices('GPU')
+    print("Logical devices: ", logical_devices)
 
     # for gpu in logical_devices:
     #     tf.config.experimental.set_memory_growth(gpu, True)
