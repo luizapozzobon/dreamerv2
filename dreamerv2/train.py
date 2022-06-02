@@ -195,8 +195,15 @@ def main():
         # https://colab.research.google.com/github/tensorflow/docs/blob/master/site/en/tutorials/distribute/custom_training.ipynb?hl=nl#scrollTo=gX975dMSNw0e
         def distributed_train_agent(dataset_inputs):
             per_replica_losses = strategy.run(train_agent, args=(dataset_inputs,))
-            return strategy.reduce(tf.distribute.ReduceOp.MEAN, per_replica_losses,
-                                     axis=None)
+            all_reduced = {}
+            for key, value in per_replica_losses.items():
+                try:
+                    reduced_value = strategy.reduce(tf.distribute.ReduceOp.SUM, value, axis=None)
+                    all_reduced[key] = reduced_value
+                except ValueError as err:
+                    # There's a scalar inside the dictionary
+                    pass
+            return all_reduced
 
         #train_agent(next(train_dataset))
         distributed_train_agent(next(train_dataset))
