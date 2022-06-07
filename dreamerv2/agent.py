@@ -1,6 +1,8 @@
 import tensorflow as tf
 from tensorflow.keras import mixed_precision as prec
 
+import horovod.tensorflow as hvd
+
 import common
 import expl
 
@@ -99,6 +101,7 @@ class WorldModel(common.Module):
     with tf.GradientTape() as model_tape:
       model_loss, state, outputs, metrics = self.loss(data, state)
     modules = [self.encoder, self.rssm, *self.heads.values()]
+    model_tape = hvd.DistributedGradientTape(model_tape)
     metrics.update(self.model_opt(model_tape, model_loss, modules))
     return state, outputs, metrics
 
