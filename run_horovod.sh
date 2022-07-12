@@ -1,1 +1,1 @@
-CUDA_VISIBLE_DEVICES=0,1 horovodrun -np 2 -H localhost:2 python3 dreamerv2/train.py --logdir ~/logdir/atari_riverraid/horovod/1 --configs atari --task atari_riverraid
+NCCL_DEBUG=INFO CUDA_VISIBLE_DEVICES=0,1 horovodrun -np 2 -H localhost:2 --timeline-filename timeline.json python3 dreamerv2/train.py --logdir ./logdir/atari_riverraid/horovod/3_fixed_lr --configs atari --task atari_riverraid

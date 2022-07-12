@@ -246,6 +246,8 @@ class ActorCritic(common.Module):
       actor_loss, mets3 = self.actor_loss(seq, target)
     with tf.GradientTape() as critic_tape:
       critic_loss, mets4 = self.critic_loss(seq, target)
+    actor_tape = hvd.DistributedGradientTape(actor_tape)
+    critic_tape = hvd.DistributedGradientTape(critic_tape)
     metrics.update(self.actor_opt(actor_tape, actor_loss, self.actor))
     metrics.update(self.critic_opt(critic_tape, critic_loss, self.critic))
     metrics.update(**mets1, **mets2, **mets3, **mets4)

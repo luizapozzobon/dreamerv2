@@ -27,6 +27,7 @@ import ruamel.yaml as yaml
 import agent
 import common
 
+broadcasted = False
 
 def main():
     configs = yaml.safe_load((
@@ -37,14 +38,24 @@ def main():
         config = config.update(configs[name])
         config = common.Flags(config).parse(remaining)
 
+
     logdir = pathlib.Path(config.logdir).expanduser()
     logdir.mkdir(parents=True, exist_ok=True)
     config.save(logdir / 'config.yaml')
     print(config, '\n')
     print('Logdir', logdir)
 
+    # FIXME Only used in multi-gpu setting
+    config = config.update({
+        "model_opt": {"lr": 2 * config.model_opt.lr},
+        "actor_opt": {"lr": 2 * config.actor_opt.lr},
+        "critic_opt": {"lr": 2 * config.critic_opt.lr},
+        })
+    print(config.critic_opt.lr)
+
     import horovod.tensorflow as hvd
     hvd.init()
+
 
     import tensorflow as tf
     tf.config.experimental_run_functions_eagerly(not config.jit)
@@ -56,7 +67,7 @@ def main():
     for gpu in physical_devices:
         tf.config.experimental.set_memory_growth(gpu, True)
 
-    tf.config.set_visible_devices(
+    tf.config.experimental.set_visible_devices(
         physical_devices[hvd.local_rank()], device_type='GPU'
     )
 
@@ -109,25 +120,26 @@ def main():
       return env
   
     def per_episode(ep, mode):
-      length = len(ep['reward']) - 1
-      score = float(ep['reward'].astype(np.float64).sum())
-      print(f'{mode.title()} episode has {length} steps and return {score:.1f}.')
-      logger.scalar(f'{mode}_return', score)
-      logger.scalar(f'{mode}_length', length)
-      for key, value in ep.items():
-        if re.match(config.log_keys_sum, key):
-          logger.scalar(f'sum_{mode}_{key}', ep[key].sum())
-        if re.match(config.log_keys_mean, key):
-          logger.scalar(f'mean_{mode}_{key}', ep[key].mean())
-        if re.match(config.log_keys_max, key):
-          logger.scalar(f'max_{mode}_{key}', ep[key].max(0).mean())
-      should = {'train': should_video_train, 'eval': should_video_eval}[mode]
-      if should(step):
-        for key in config.log_keys_video:
-          logger.video(f'{mode}_policy_{key}', ep[key])
-      replay = dict(train=train_replay, eval=eval_replay)[mode]
-      logger.add(replay.stats, prefix=mode)
-      logger.write()
+      if hvd.local_rank() == 0:
+          length = len(ep['reward']) - 1
+          score = float(ep['reward'].astype(np.float64).sum())
+          print(f'{mode.title()} episode has {length} steps and return {score:.1f}.')
+          logger.scalar(f'{mode}_return', score)
+          logger.scalar(f'{mode}_length', length)
+          for key, value in ep.items():
+            if re.match(config.log_keys_sum, key):
+              logger.scalar(f'sum_{mode}_{key}', ep[key].sum())
+            if re.match(config.log_keys_mean, key):
+              logger.scalar(f'mean_{mode}_{key}', ep[key].mean())
+            if re.match(config.log_keys_max, key):
+              logger.scalar(f'max_{mode}_{key}', ep[key].max(0).mean())
+          should = {'train': should_video_train, 'eval': should_video_eval}[mode]
+          if should(step):
+            for key in config.log_keys_video:
+              logger.video(f'{mode}_policy_{key}', ep[key])
+          replay = dict(train=train_replay, eval=eval_replay)[mode]
+          logger.add(replay.stats, prefix=mode)
+          logger.write()
   
     print('Create envs.')
     num_eval_envs = min(config.envs, config.eval_eps)
@@ -176,13 +188,16 @@ def main():
         *args, mode='explore' if should_expl(step) else 'train')
     eval_policy = lambda *args: agnt.policy(*args, mode='eval')
   
+
     def train_step(tran, worker):
+      global broadcasted
       if should_train(step):
         for i in range(config.train_steps):
           mets = train_agent(next(train_dataset))
           [metrics[key].append(value) for key, value in mets.items()]
 
-          if i == 0:
+          if not broadcasted:
+            print(f"Broadcasting variables with horovod on step {step} and batch {i}.")
             # World model
             hvd.broadcast_variables(agnt.wm.variables, root_rank=0)
             hvd.broadcast_variables(agnt.wm.model_opt.variables, root_rank=0)
@@ -192,22 +207,28 @@ def main():
             hvd.broadcast_variables(agnt._task_behavior.actor_opt.variables, root_rank=0)
             hvd.broadcast_variables(agnt._task_behavior.critic_opt.variables, root_rank=0)
 
-      if should_log(step):
+            broadcasted = True
+
+      if should_log(step) and hvd.local_rank() == 0:
         for name, values in metrics.items():
           logger.scalar(name, np.array(values, np.float64).mean())
           metrics[name].clear()
         logger.add(agnt.report(next(report_dataset)), prefix='train')
         logger.write(fps=True)
+
     train_driver.on_step(train_step)
   
     while step < config.steps:
-      logger.write()
-      print('Start evaluation.')
-      logger.add(agnt.report(next(eval_dataset)), prefix='eval')
+      if hvd.local_rank() == 0:
+          logger.write()
+          print('Start evaluation.')
+          logger.add(agnt.report(next(eval_dataset)), prefix='eval')
       eval_driver(eval_policy, episodes=config.eval_eps)
-      print('Start training.')
+      if hvd.local_rank() == 0:
+          print('Start training.')
       train_driver(train_policy, steps=config.eval_every)
-      agnt.save(logdir / 'variables.pkl')
+      if hvd.local_rank() == 0:
+          agnt.save(logdir / 'variables.pkl')
     for env in train_envs + eval_envs:
       try:
         env.close()
