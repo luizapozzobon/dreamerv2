@@ -200,6 +200,7 @@ class Atari:
         sticky=True,
         all_actions=False,
         env_seed=None,
+        debug=False,
     ):
         assert size[0] == size[1]
         import gym.envs.atari
@@ -208,11 +209,9 @@ class Atari:
         if name == "james_bond":
             name = "jamesbond"
         with self.LOCK:
-            if env_seed is not None:
-                import ale_py
+            import ale_py
 
-                # TODO test
-                ale_py = patch_atari_seed(ale_py, env_seed, name)
+            ale_py = patch_atari_seed(ale_py, env_seed, name)
 
             env = gym.envs.atari.AtariEnv(
                 game=name,
@@ -220,6 +219,7 @@ class Atari:
                 frameskip=1,
                 repeat_action_probability=0.25 if sticky else 0.0,
                 full_action_space=all_actions,
+                render_mode=None if not debug else "human",
             )
         # Avoid unnecessary rendering in inner env.
         env._get_obs = lambda: None
@@ -230,6 +230,27 @@ class Atari:
         )
         self._size = size
         self._grayscale = grayscale
+
+        if debug:
+            import time
+
+            NUM_STEPS = 500
+            self._env.reset()
+            for step in range(NUM_STEPS):
+                action = env.action_space.sample()
+
+                # apply the action
+                obs, reward, done, info = env.step(action)
+
+                # Wait a bit before the next frame unless you want to see a crazy fast video
+                time.sleep(0.01)
+
+                # If the episode is up, then start another one
+                if done:
+                    env.reset()
+
+            # Close the env
+            env.close()
 
     @property
     def obs_space(self):
@@ -286,11 +307,7 @@ class Crafter:
 
         self._env = crafter.Env(reward=reward, seed=seed)
         self._env = crafter.Recorder(
-            self._env,
-            outdir,
-            save_stats=True,
-            save_video=False,
-            save_episode=False,
+            self._env, outdir, save_stats=True, save_video=False, save_episode=False,
         )
         self._achievements = crafter.constants.achievements.copy()
 
@@ -306,7 +323,7 @@ class Crafter:
         }
         spaces.update(
             {
-                f"log_achievement_{k}": gym.spaces.Box(0, 2**31 - 1, (), np.int32)
+                f"log_achievement_{k}": gym.spaces.Box(0, 2 ** 31 - 1, (), np.int32)
                 for k in self._achievements
             }
         )

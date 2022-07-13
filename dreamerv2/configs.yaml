@@ -81,6 +81,7 @@ defaults:
 atari:
 
   task: atari_pong
+  test_seeds: [1, 9, 18]
   encoder: {mlp_keys: '$^', cnn_keys: 'image'}
   decoder: {mlp_keys: '$^', cnn_keys: 'image'}
   time_limit: 27000
