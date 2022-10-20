@@ -1,0 +1,7 @@
+gym[atari] < 0.26
+AutoROM
+crafter
+dm_control
+ruamel.yaml
+tensorflow-gpu==2.4.2
+tensorflow_probability==0.12.2
