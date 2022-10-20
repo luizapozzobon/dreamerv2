@@ -6,6 +6,7 @@ import pathlib
 import re
 import sys
 import warnings
+from copy import copy
 
 try:
     import rich.traceback
@@ -26,12 +27,45 @@ import numpy as np
 import ruamel.yaml as yaml
 
 
+# Borrowed from rl-baseline3-zoo
+class StoreDict:
+    """
+    Custom argparse action for storing dict.
+
+    In: args1:0.0 args2:"dict(a=1)"
+    Out: {'args1': 0.0, arg2: dict(a=1)}
+    """
+
+    def __call__(self, values):
+        arg_dict = {}
+        for arguments in values:
+            key = arguments.split(":")[0]
+            value = ":".join(arguments.split(":")[1:])
+            # Evaluate the string as python code
+            arg_dict[key] = eval(value)
+        return arg_dict
+
+
 def main():
 
     configs = yaml.safe_load((
             pathlib.Path(sys.argv[0]).parent / 'configs.yaml').read_text())
     parsed, remaining = common.Flags(configs=['defaults']).parse(known_only=True)
     config = common.Config(configs['defaults'])
+
+    # To enable RandomALE experiments
+    sd = StoreDict()
+    env_kwargs, eval_env_kwargs = {}, {}
+    for i, val in enumerate(copy(remaining)):
+        if val == "--env-kwargs":
+            args = remaining[i+1].split(",")
+            env_kwargs = sd(args)
+            remaining = remaining[:i] + remaining[i+2:]
+        elif val == "--eval-env-kwargs":
+            args = remaining[i+1].split(",")
+            eval_env_kwargs = sd(args)
+            remaining = remaining[:i] + remaining[i+2:]
+
     for name in parsed.configs:
         config = config.update(configs[name])
     config = common.Flags(config).parse(remaining)
@@ -73,16 +107,17 @@ def main():
     should_video_eval = common.Every(config.eval_every)
     should_expl = common.Until(config.expl_until // config.action_repeat)
 
-    def make_env(mode):
+    def make_env(mode, kwargs):
         suite, task = config.task.split('_', 1)
         if suite == 'dmc':
             env = common.DMC(
                     task, config.action_repeat, config.render_size, config.dmc_camera)
             env = common.NormalizeAction(env)
         elif suite == 'atari':
+            breakpoint()
             env = common.Atari(
                     task, config.action_repeat, config.render_size,
-                    config.atari_grayscale)
+                    config.atari_grayscale, kwargs=kwargs)
             env = common.OneHotAction(env)
         elif suite == 'crafter':
             assert config.action_repeat == 1
@@ -119,8 +154,8 @@ def main():
     print('Create envs.')
     num_eval_envs = min(config.envs, config.eval_eps)
     if config.envs_parallel == 'none':
-        train_envs = [make_env('train') for _ in range(config.envs)]
-        eval_envs = [make_env('eval') for _ in range(num_eval_envs)]
+        train_envs = [make_env('train', env_kwargs) for _ in range(config.envs)]
+        eval_envs = [make_env('eval', eval_env_kwargs) for _ in range(num_eval_envs)]
     else:
         make_async_env = lambda mode: common.Async(
                 functools.partial(make_env, mode), config.envs_parallel)

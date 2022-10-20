@@ -169,17 +169,18 @@ class Atari:
 
   def __init__(
       self, name, action_repeat=4, size=(84, 84), grayscale=True, noops=30,
-      life_done=False, sticky=True, all_actions=False):
+      life_done=False, sticky=True, all_actions=False, kwargs={}):
     assert size[0] == size[1]
-    import gym.wrappers
     import gym.envs.atari
+    import gym.wrappers
     if name == 'james_bond':
       name = 'jamesbond'
     with self.LOCK:
       env = gym.envs.atari.AtariEnv(
           game=name, obs_type='image', frameskip=1,
           repeat_action_probability=0.25 if sticky else 0.0,
-          full_action_space=all_actions)
+          full_action_space=all_actions,
+          **kwargs)
     # Avoid unnecessary rendering in inner env.
     env._get_obs = lambda: None
     # Tell wrapper that the inner env has no action repeat.
