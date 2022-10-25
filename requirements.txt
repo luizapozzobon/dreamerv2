@@ -1,4 +1,5 @@
 gym[atari] < 0.26
+gym[other] < 0.26
 AutoROM
 crafter
 dm_control

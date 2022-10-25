@@ -114,7 +114,6 @@ def main():
                     task, config.action_repeat, config.render_size, config.dmc_camera)
             env = common.NormalizeAction(env)
         elif suite == 'atari':
-            breakpoint()
             env = common.Atari(
                     task, config.action_repeat, config.render_size,
                     config.atari_grayscale, kwargs=kwargs)
