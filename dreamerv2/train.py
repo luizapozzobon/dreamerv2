@@ -55,16 +55,24 @@ def main():
 
     # To enable RandomALE experiments
     sd = StoreDict()
+    clean_remaining = []
     env_kwargs, eval_env_kwargs = {}, {}
-    for i, val in enumerate(copy(remaining)):
-        if val == "--env-kwargs":
-            args = remaining[i+1].split(",")
-            env_kwargs = sd(args)
-            remaining = remaining[:i] + remaining[i+2:]
-        elif val == "--eval-env-kwargs":
-            args = remaining[i+1].split(",")
-            eval_env_kwargs = sd(args)
-            remaining = remaining[:i] + remaining[i+2:]
+    for i, (key, val) in enumerate(zip(remaining, remaining[1:])):
+        if '--' in key:
+            clean_remaining.append(key)
+        if '--' not in val:
+            clean_remaining.append(val)
+
+        if key in ["--env-kwargs", "--eval-env-kwargs"]:
+            args = val.split(",")
+            if key == "--env-kwargs":
+                env_kwargs = sd(args)
+            elif key == "--eval-env-kwargs":
+                eval_env_kwargs = sd(args)
+            clean_remaining.pop(-1)
+            clean_remaining.pop(-1)
+
+    remaining = clean_remaining
 
     for name in parsed.configs:
         config = config.update(configs[name])
